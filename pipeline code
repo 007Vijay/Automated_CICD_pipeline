@@ -1,0 +1,163 @@
+pipeline {
+    agent any
+    environment {
+        GIT_REPO_URL = "https://github.com/007Vijay/test.git" // git repo. link for website
+        GIT_BRANCH = "main"  
+        DOCKER_IMAGE_NAME = "v"  // Docker image name 
+        DOCKER_CONTAINER_NAME = "test-container" // name of container for docker 
+        REMOTE_SERVER = "ubuntu@3.95.246.8"  // ip of remote server (i have used AWS )
+        SSH_CREDENTIALS_ID = "remote-server-ssh" // credentils for ssh connections
+        APP_DIR = "/home/ubuntu/deploy" 
+        WEBSITE_DIR = "website"   
+        DEVELOPER_EMAIL = "shilwantvijay123@gmail.com,9890623352q@gmail.com" // email of developer and admins to send emails
+        TARGET_URL = "https://cdac-project.duckdns.org"   // URL for nikto scan 
+        OUTPUT_FILE = "scan.html"           //output file of nikto scan
+    }
+
+    stages {
+        stage('Clean Up Docker Environment') {
+            steps {
+                script {
+                    sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${REMOTE_SERVER} ' 
+                                echo "Stopping all running Docker containers..."
+                                sudo docker stop \$(sudo docker ps -q) || true
+
+                                echo "Removing all stopped Docker containers..."
+                                sudo docker rm -f \$(sudo docker ps -a -q) || true
+
+                                echo "Removing all Docker images..."
+                                sudo docker rmi -f \$(sudo docker images -q) || true
+
+                                echo "Removing Docker stack..."
+                                sudo docker stack rm nginx_stack || true
+
+                                echo "Leaving Docker Swarm..."
+                                sudo docker swarm leave --force || true
+                            '
+                            rm -f ${OUTPUT_FILE}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Clone Repository on Remote Server') {
+            steps {
+                script {
+                    sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${REMOTE_SERVER} '
+                                mkdir -p ${APP_DIR} &&
+                                cd ${APP_DIR} &&
+                                if [ -d ".git" ]; then
+                                    git reset --hard &&
+                                    git pull origin ${GIT_BRANCH}
+                                else
+                                    git clone --branch ${GIT_BRANCH} ${GIT_REPO_URL} .
+                                fi
+                            '
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Build and Deploy Docker Image on Remote Server') {
+            steps {
+                script {
+                    sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                        sh """
+                            scp -o StrictHostKeyChecking=no /var/lib/jenkins/files/* ${REMOTE_SERVER}:${APP_DIR}/
+                            ssh -o StrictHostKeyChecking=no ${REMOTE_SERVER} '
+                                cd ${APP_DIR} &&
+                                echo "Building Docker image..."
+                                sudo docker build -t ${DOCKER_IMAGE_NAME} . &&
+                                echo "Initializing Docker Swarm..."
+                                sudo docker swarm init --advertise-addr 172.31.21.74 &&
+                                echo "Deploying Docker stack..."
+                                sudo docker stack deploy -c docker-compose.yml nginx_stack
+                            '
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${REMOTE_SERVER} '
+                                sudo docker stack services nginx_stack
+                            '
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Run Nikto Scan') {
+            steps {
+                script {
+                    sh "nikto -h ${TARGET_URL} -Tuning 123bde -o ${OUTPUT_FILE} -Format html"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                emailext(
+                    to: "${DEVELOPER_EMAIL}",
+                    subject: "Jenkins Pipeline Success: Project Deployed Successfully",
+                    body: """
+                    The Jenkins pipeline has completed successfully.<br>
+                    - All old containers and images were removed.<br>
+                    - The latest project code was cloned and built.<br>
+                    - The website is now deployed with Docker.<br>
+                    - Security scan report is attached.<br>
+                    Regards,  <br>
+                    Jenkins Admin <br>
+                    
+                    visit website-${TARGET_URL}
+                    """,
+                    attachmentsPattern: "${OUTPUT_FILE}",
+                    mimeType: 'text/html'
+                )
+            }
+        }
+
+        failure {
+            script {
+                def buildLogs = currentBuild.rawBuild.getLog(150)
+                emailext(
+                    to: "${DEVELOPER_EMAIL}",
+                    subject: "Jenkins Pipeline Failed: Deployment Issues",
+                    body: """
+                    The Jenkins pipeline has failed.<br>
+                    Please find the logs below to troubleshoot the issue:<br>
+                    <pre>${buildLogs.join('\n')}</pre><br>
+                    Regards,  <br>
+                    Jenkins Admin <br>
+                    """,
+                    mimeType: 'text/html'
+                )
+            }
+        }
+
+        always {
+            echo 'Cleaning up Docker environment...'
+            sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                sh """
+                  ssh -o StrictHostKeyChecking=no ${REMOTE_SERVER} '
+                        sudo docker system prune -f
+                  '
+             """
+           }
+        }
+    }
+}
